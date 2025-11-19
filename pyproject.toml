@@ -1,0 +1,53 @@
+[project]
+name = "westworld"
+version = "0.1.0"
+description = "Halluminate Westworld: Benchmarking Web Agents on Wealistic Web Sites"
+readme = "README.md"
+license = { text = "Apache-2.0" }
+requires-python = ">=3.10"
+authors = [
+    { name = "Halluminate" }
+]
+keywords = ["benchmark", "evaluation", "agent", "environment", "reinforcement learning"]
+classifiers = [
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: Apache Software License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+dependencies = [
+    "pydantic>=2.0.0",
+    "loguru>=0.7.0",
+    "aiofiles>=23.0.0",
+]
+
+[project.optional-dependencies]
+datasets = [
+    "datasets>=2.14.0",
+]
+playwright = [
+    "playwright>=1.40.0",
+]
+dev = [
+    "pytest>=7.0.0",
+    "pytest-asyncio>=0.21.0",
+]
+
+[project.urls]
+Homepage = "https://halluminate.ai/blog/westworld"
+Repository = "https://github.com/Halluminate/westworld"
+Issues = "https://github.com/Halluminate/westworld/issues"
+
+[project.scripts]
+westworld-demo = "westworld.demo:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/westworld"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
