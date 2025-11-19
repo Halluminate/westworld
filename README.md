@@ -52,6 +52,39 @@ python -m westworld.demo --index 0
 python -m westworld.demo --task-id westworld/azora/basic_checkout/22
 ```
 
+## Evaluation
+
+How to instantiate and use an evaluator
+```python
+from westworld.base import DatasetItem, instantiate
+
+# Load a task from the dataset
+task_item = DatasetItem(**dataset[0])
+
+# Generate the task configuration
+task_config = task_item.generate_task_config()
+
+# Access task details
+print(f"Task: {task_config.task}")
+print(f"URL: {task_config.url}")
+print(f"Evaluation Config: {task_config.eval_config}")
+
+# Instantiate evaluator when starting the agent task
+agent = ...
+evaluator = instantiate(task_config.eval_config)
+
+for _ in range(max_steps):
+    # Agent takes a step
+    ...
+
+    # Update evaluator
+    await evaluator.update(...)
+
+# Get the final evaluation result
+eval_result = await evaluator.compute()
+```
+*Note: most evaluators rely on site state for verification, so ensure the verifier is run before closing the browser window*
+
 ## Dataset
 
 The benchmark dataset is available on [HuggingFace](https://huggingface.co/datasets/Halluminate/westworld):
