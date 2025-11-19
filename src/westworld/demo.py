@@ -21,7 +21,7 @@ Usage:
     export HALLUMINATE_API_KEY=your-key-here
 
     # Run the demo
-    python -m westworld.demo --task-id westworld/azora/basic_checkout/0
+    python -m westworld.demo --task-id westworld/azora/basic_checkout/22
 
     # Or load by index from HuggingFace
     python -m westworld.demo --dataset Halluminate/westworld --index 0
@@ -45,20 +45,34 @@ def parse_args() -> argparse.Namespace:
         description="Human-in-the-loop demo for Westworld benchmark",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    parser.add_argument("--task-id", help="Task ID to load (e.g., westworld/azora/basic_checkout/0)")
-    parser.add_argument("--dataset", default=HF_DATASET, help=f"HuggingFace dataset name (default: {HF_DATASET})")
-    parser.add_argument("--split", default=HF_SPLIT, help=f"Dataset split (default: validation)")
+    parser.add_argument(
+        "--task-id", help="Task ID to load (e.g., westworld/azora/basic_checkout/22)"
+    )
+    parser.add_argument(
+        "--dataset",
+        default=HF_DATASET,
+        help=f"HuggingFace dataset name (default: {HF_DATASET})",
+    )
+    parser.add_argument(
+        "--split", default=HF_SPLIT, help="Dataset split (default: validation)"
+    )
     parser.add_argument("--index", type=int, help="Dataset index to load")
-    parser.add_argument("--headless", action="store_true", help="Run browser in headless mode")
+    parser.add_argument(
+        "--headless", action="store_true", help="Run browser in headless mode"
+    )
     return parser.parse_args()
 
 
-def load_task(task_id: str, dataset: str = HF_DATASET, split: str = HF_SPLIT) -> Dict[str, Any]:
+def load_task(
+    task_id: str, dataset: str = HF_DATASET, split: str = HF_SPLIT
+) -> Dict[str, Any]:
     """Load a task row by task_id from the dataset."""
     try:
         from datasets import load_dataset as hf_load_dataset
     except ImportError:
-        print("Error: datasets package required. Install with: pip install westworld[datasets]")
+        print(
+            "Error: datasets package required. Install with: pip install westworld[datasets]"
+        )
         sys.exit(1)
 
     print(f"Loading dataset: {dataset} (split: {split})")
@@ -71,12 +85,16 @@ def load_task(task_id: str, dataset: str = HF_DATASET, split: str = HF_SPLIT) ->
     raise ValueError(f"Task {task_id} not found in {dataset}/{split}")
 
 
-def load_task_by_index(index: int, dataset: str = HF_DATASET, split: str = HF_SPLIT) -> Dict[str, Any]:
+def load_task_by_index(
+    index: int, dataset: str = HF_DATASET, split: str = HF_SPLIT
+) -> Dict[str, Any]:
     """Load a task row by index from the dataset."""
     try:
         from datasets import load_dataset as hf_load_dataset
     except ImportError:
-        print("Error: datasets package required. Install with: pip install westworld[datasets]")
+        print(
+            "Error: datasets package required. Install with: pip install westworld[datasets]"
+        )
         sys.exit(1)
 
     print(f"Loading dataset: {dataset} (split: {split})")
@@ -150,7 +168,9 @@ async def run_human_session(task_data: Dict[str, Any], headless: bool = False) -
         await attach_human_agent_loop(page, evaluator)
 
         # Wait for user to press Enter when task is complete
-        await asyncio.to_thread(input, "\nPress Enter when you've completed the task... ")
+        await asyncio.to_thread(
+            input, "\nPress Enter when you've completed the task... "
+        )
 
         # Final update before computing result
         try:
@@ -187,7 +207,9 @@ async def async_main():
     if args.task_id:
         task_data = load_task(args.task_id, dataset=args.dataset, split=args.split)
     elif args.index is not None:
-        task_data = load_task_by_index(args.index, dataset=args.dataset, split=args.split)
+        task_data = load_task_by_index(
+            args.index, dataset=args.dataset, split=args.split
+        )
     else:
         print("Error: Must provide either --task-id or --index")
         sys.exit(1)

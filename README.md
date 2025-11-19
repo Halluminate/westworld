@@ -40,7 +40,7 @@ westworld-demo --index 0
 
 **Option B: Run by specific task ID**
 ```bash
-westworld-demo --task-id westworld/azora/basic_checkout/0
+westworld-demo --task-id westworld/azora/basic_checkout/22
 ```
 
 **Alternative: Run as Python module**
@@ -49,7 +49,7 @@ westworld-demo --task-id westworld/azora/basic_checkout/0
 python -m westworld.demo --index 0
 
 # By task ID
-python -m westworld.demo --task-id westworld/azora/basic_checkout/0
+python -m westworld.demo --task-id westworld/azora/basic_checkout/22
 ```
 
 ## Dataset
