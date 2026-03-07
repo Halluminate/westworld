@@ -112,6 +112,18 @@ The benchmark includes the following task categories (L1 categories):
   - Budget-constrained searches
 
 
+## Simulated Environments
+
+The benchmark tasks run on open-source simulated websites. You can self-host these environments or inspect their source code:
+
+| Domain | Description | Source Code |
+|--------|-------------|-------------|
+| Noodle Flights | Flight search engine | [Halluminate/noodle-flights](https://github.com/Halluminate/noodle-flights) |
+| Azora | E-commerce store | *Coming soon* |
+| Goodbuy | E-commerce store | *Coming soon* |
+| Megamart | E-commerce store | *Coming soon* |
+| Travelpedia | Travel booking platform | *Coming soon* |
+
 ## License
 
 This project is licensed under the Apache License 2.0 - see the [LICENSE](LICENSE) file for details.
