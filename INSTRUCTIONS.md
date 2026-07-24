@@ -153,14 +153,6 @@ export HALLUMINATE_API_KEY="..."
 ```bash
 # Phoenix collector (defaults to this if unset)
 export PHOENIX_COLLECTOR_ENDPOINT="http://localhost:6006"
-
-# Silence gRPC's "FD from fork" spam
-export GRPC_VERBOSITY=NONE
-export GLOG_minloglevel=3
-
-# Screenshot behaviour (see Screenshots section)
-export EMBED_SCREENSHOTS=1        # 0 disables base64 embedding
-export MAX_EMBED_BYTES=600000     # per-image cap for embedding
 ```
 
 To persist them, put the exports in a `.env` file and `source .env`, or add them to
