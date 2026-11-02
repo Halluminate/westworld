@@ -147,7 +147,8 @@ def verify_hotel_search_complete(state: ApplicationState, params: HotelSearchPar
             errors.append(f"Room count mismatch: expected {len(params.rooms)} rooms, got {len(state.roomDetails)}")
         else:
             # Verify room configurations as a set (order doesn't matter)
-            expected_rooms = list(params.rooms)
+            # Match age-specific rooms before flexible rooms can consume them.
+            expected_rooms = sorted(params.rooms, key=lambda room: not bool(room.get("child_ages")))
             actual_rooms = list(state.roomDetails)
 
             # Try to match each expected room with an actual room
