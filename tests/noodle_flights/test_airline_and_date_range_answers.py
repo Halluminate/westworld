@@ -109,6 +109,22 @@ def test_date_range_answer_listing_other_flights_fails(simulator):
     assert not check_date_range("Each range: OS101 and OS102 are the cheapest.")
 
 
+def test_date_range_answer_may_name_any_flight_of_the_requested_airline(monkeypatch):
+    # UA210 has too few seats for two passengers and UA300/UA301 has a stop, so the verifier
+    # does not require them, but naming them as United options is not a wrong answer.
+    api = {
+        "departingFlights": [*OUTBOUND, flight("UA210", 530, seats=1), flight("UA300/UA301", 470)],
+        "returningFlights": RETURN,
+    }
+    monkeypatch.setattr(date_range_search, "fetch_flights", lambda *args, **kwargs: api)
+    task_data = date_range_search.create_task_data_from_dict({**date_range_values(), "passengers": 2})
+    answer = (
+        "Each range: cheapest OS101 ($1,000) and OS102 ($1,200); United UA200 and UA201, "
+        "plus UA210 (one seat left) and UA300/UA301 (one stop)."
+    )
+    assert date_range_search.verify_date_range_search_complete(STATE, task_data, answer)["success"]
+
+
 def test_simplified_date_range_answers(simulator):
     assert check_date_range_simplified("Each range: OS101 for $500 out and OS102 for $600 back.")
     assert check_date_range_simplified("Each range: outbound $500.00 and return $600.")
