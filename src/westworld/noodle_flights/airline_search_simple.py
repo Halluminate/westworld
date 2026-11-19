@@ -17,6 +17,7 @@ from westworld.base import (
     async_retry_with_exponential_backoff,
     get_import_path,
 )
+from westworld.noodle_flights.answer_matching import amount_mentioned, money_amount_mentioned, other_money_amounts
 
 
 if TYPE_CHECKING:
@@ -551,8 +552,19 @@ def verify_airline_search_complete(
     }
 
     response_text = agent_response or ""
-    price_present = bool(formatted_total_price) and (formatted_total_price in response_text)
-    doubled_present = bool(formatted_doubled_total_price) and (formatted_doubled_total_price in response_text)
+    price_present = amount_mentioned(response_text, total_price)
+    doubled_present = money_amount_mentioned(response_text, doubled_total_price)
+
+    # Prices of other options mean the response lists alternatives instead of answering
+    candidate_amounts: List[int] = []
+    for flight in [*departing_flights, *returning_flights]:
+        per_pax = _per_passenger_price_usd(flight, cabin)
+        if isinstance(per_pax, int):
+            candidate_amounts.extend([per_pax, per_pax * num_passengers])
+    allowed_amounts = [total_price, dep_price_per_pax, ret_price_per_pax, dep_total, ret_total]
+    if isinstance(dep_price_per_pax, int) and isinstance(ret_price_per_pax, int):
+        allowed_amounts.append(dep_price_per_pax + ret_price_per_pax)
+    other_prices = other_money_amounts(response_text, candidate_amounts, allowed_amounts)
 
     # Validate UI state dates if provided
     ui_dep_raw = current_state.get("departureDate")
@@ -571,11 +583,16 @@ def verify_airline_search_complete(
             "candidate": formatted_doubled_total_price,
             "matched": bool(not doubled_present),
         },
+        {
+            "bucket": "other_option_prices_absent",
+            "candidate": [str(amount) for amount in other_prices],
+            "matched": not other_prices,
+        },
         {"bucket": "ui_departure_date", "candidate": ui_dep, "matched": bool(dep_date_ok)},
         {"bucket": "ui_return_date", "candidate": ui_ret, "matched": bool(ret_date_ok)},
     ]
 
-    success = bool(price_present and (not doubled_present) and dep_date_ok and ret_date_ok)
+    success = bool(price_present and (not doubled_present) and (not other_prices) and dep_date_ok and ret_date_ok)
 
     return {
         "success": success,
