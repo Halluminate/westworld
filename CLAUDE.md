@@ -18,7 +18,7 @@ westworld-demo --task-id westworld/azora/basic_checkout/22
 westworld-demo --index 0
 
 # Run tests
-uv run pytest
+uv run --extra dev pytest
 
 # Environment variable required for simulated environments
 export HALLUMINATE_API_KEY=your-key-here
@@ -72,7 +72,7 @@ Current domains:
 - Build system: hatchling
 - Source layout: `src/westworld/`
 - Python: >=3.10
-- Core deps: pydantic, loguru, aiofiles
+- Core deps: pydantic, loguru, aiofiles, requests
 - Optional deps: `datasets` (HuggingFace), `playwright` (browser automation)
 - Entry point: `westworld-demo` -> `westworld.demo:main`
-- No tests exist in the repo yet
+- Tests: `tests/` (pytest), run in CI on Python 3.10 and 3.12
