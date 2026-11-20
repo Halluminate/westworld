@@ -16,6 +16,11 @@ from westworld.base import (
     async_retry_with_exponential_backoff,
     get_import_path,
 )
+from westworld.noodle_flights.answer_matching import (
+    mentioned_flight_numbers,
+    other_option_amounts,
+    price_mentioned,
+)
 
 
 if TYPE_CHECKING:
@@ -474,8 +479,33 @@ def verify(
     }
 
     response_text = agent_response or ""
-    price_present = bool(formatted_total_price) and (formatted_total_price in response_text)
-    doubled_present = bool(formatted_doubled_total_price) and (formatted_doubled_total_price in response_text)
+    # The total must be written as money ("$2,200", "2,200 USD", "2200 dollars")
+    price_present = price_mentioned(response_text, total_price)
+    doubled_present = price_mentioned(response_text, doubled_total_price)
+
+    # Naming other direct options, or quoting their prices with or without a currency
+    # marker, means the response lists alternatives instead of answering. Connecting
+    # flights cannot be the answer to this direct-only task, so mentioning them is fine.
+    direct_flights = [f for f in [*departing_flights, *returning_flights] if not f.segments]
+    answer_flight_numbers = {
+        f.flightNumber
+        for flights, price in ((departing_flights, dep_price_per_pax), (returning_flights, ret_price_per_pax))
+        for f in flights
+        if not f.segments and price is not None and _per_passenger_price_usd(f, cabin) == price
+    }
+    mentioned = mentioned_flight_numbers(
+        response_text, [f.flightNumber for f in [*departing_flights, *returning_flights]]
+    )
+    other_flights = sorted((mentioned & {f.flightNumber for f in direct_flights}) - answer_flight_numbers)
+    candidate_amounts: List[int] = []
+    for flight in direct_flights:
+        per_pax = _per_passenger_price_usd(flight, cabin)
+        if isinstance(per_pax, int):
+            candidate_amounts.extend([per_pax, per_pax * num_passengers])
+    allowed_amounts = [total_price, dep_price_per_pax, ret_price_per_pax, dep_total, ret_total]
+    if isinstance(dep_price_per_pax, int) and isinstance(ret_price_per_pax, int):
+        allowed_amounts.append(dep_price_per_pax + ret_price_per_pax)
+    other_prices = other_option_amounts(response_text, candidate_amounts, allowed_amounts)
 
     # Validate UI state dates if provided
     ui_dep_raw = (site_state or {}).get("departureDate")
@@ -494,11 +524,24 @@ def verify(
             "candidate": formatted_doubled_total_price,
             "matched": bool(not doubled_present),
         },
+        {"bucket": "other_flights_absent", "candidate": other_flights, "matched": not other_flights},
+        {
+            "bucket": "other_option_prices_absent",
+            "candidate": [str(amount) for amount in other_prices],
+            "matched": not other_prices,
+        },
         {"bucket": "ui_departure_date", "candidate": ui_dep, "matched": bool(dep_date_ok)},
         {"bucket": "ui_return_date", "candidate": ui_ret, "matched": bool(ret_date_ok)},
     ]
 
-    success = bool(price_present and (not doubled_present) and dep_date_ok and ret_date_ok)
+    success = bool(
+        price_present
+        and not doubled_present
+        and not other_flights
+        and not other_prices
+        and dep_date_ok
+        and ret_date_ok
+    )
 
     return {
         "success": success,

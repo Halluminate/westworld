@@ -17,6 +17,7 @@ from westworld.base import (
     async_retry_with_exponential_backoff,
     get_import_path,
 )
+from westworld.noodle_flights.answer_matching import mentioned_flight_numbers
 
 
 if TYPE_CHECKING:
@@ -398,6 +399,11 @@ def verify_date_range_search_complete(
     }
 
     range_keys = ["date_range_one", "date_range_two", "date_range_three"]
+    all_flight_numbers: set[str] = set()
+    direct_flight_numbers: set[str] = set()
+    airline_flight_numbers: set[str] = set()
+    tied_flight_numbers: set[str] = set()
+    cheapest_answers: dict[tuple[str, str], set[str]] = {}
 
     for idx, (dep, ret) in enumerate(date_ranges):
         departure_date = dep.strftime("%Y-%m-%d")
@@ -497,6 +503,32 @@ def verify_date_range_search_complete(
         results[key]["departure_flights"] = filtered_departing
         results[key]["return_flights"] = filtered_returning
 
+        # Every flight in the results, the direct ones, the requested airline's flights
+        # (including ones the filter drops for seats or stops), and the direct flights tied
+        # at the cheapest price, so the answer check can tell which flights a response names
+        leg_cabin = _normalize_cabin_name(class_value)
+        all_flight_numbers.update(f.flightNumber for f in [*departing_flights, *returning_flights] if f.flightNumber)
+        direct_flight_numbers.update(f.flightNumber for f in [*departing_flights, *returning_flights] if not f.segments)
+        airline_flight_numbers.update(
+            f.flightNumber for f in [*departing_flights, *returning_flights] if f.airline == airline.code
+        )
+        for bucket, leg_flights, leg_filtered in (
+            ("cheapest_departure_flight", departing_flights, filtered_departing),
+            ("cheapest_return_flight", returning_flights, filtered_returning),
+        ):
+            if leg_filtered:
+                cheapest_price = _effective_price_usd(leg_filtered[0], leg_cabin)
+                at_cheapest_price = [
+                    f for f in leg_flights if not f.segments and _effective_price_usd(f, leg_cabin) == cheapest_price
+                ]
+                tied_flight_numbers.update(f.flightNumber for f in at_cheapest_price)
+                # Any eligible flight at the cheapest price answers "the cheapest option"
+                cheapest_answers[(key, bucket)] = {
+                    f.flightNumber
+                    for f in at_cheapest_price
+                    if any(cp.cabin == leg_cabin and cp.seatsRemaining >= num_passengers for cp in f.cabinPricing)
+                }
+
     # Build structured expected flights per date range
     cabin = _normalize_cabin_name(class_value)
     expected_flights: Dict[str, Dict[str, Any]] = {}
@@ -521,7 +553,18 @@ def verify_date_range_search_complete(
             "airline_return_flights": [_build_expected_flight(f, num_passengers, cabin) for f in airline_ret],
         }
 
-    text_lower = (agent_response or "").lower()
+    expected_numbers = {
+        str(ef["flight_number"])
+        for group in expected_flights.values()
+        for ef in [
+            group.get("cheapest_departure_flight"),
+            group.get("cheapest_return_flight"),
+            *group.get("airline_departure_flights", []),
+            *group.get("airline_return_flights", []),
+        ]
+        if ef and ef.get("flight_number")
+    }
+    mentioned = mentioned_flight_numbers(agent_response, all_flight_numbers | expected_numbers)
     verifications: List[Dict[str, Any]] = []
     for key, group in expected_flights.items():
         # Cheapest departure/return
@@ -529,14 +572,24 @@ def verify_date_range_search_complete(
             ef = group.get(bucket)
             if ef:
                 fn = str(ef.get("flight_number", ""))
-                matched = bool(fn and fn.lower() in text_lower)
-                verifications.append({"bucket": f"{key}_{bucket}", "flight_number": fn, "matched": matched})
+                accepted = cheapest_answers.get((key, bucket)) or {fn}
+                matched = bool(mentioned & accepted)
+                verifications.append(
+                    {"bucket": f"{key}_{bucket}", "flight_number": fn, "accepted": sorted(accepted), "matched": matched}
+                )
         # Airline-specific lists
         for list_bucket in ["airline_departure_flights", "airline_return_flights"]:
             for ef in group.get(list_bucket, []):
                 fn = str(ef.get("flight_number", ""))
-                matched = bool(fn and fn.lower() in text_lower)
+                matched = bool(fn) and fn in mentioned
                 verifications.append({"bucket": f"{key}_{list_bucket}", "flight_number": fn, "matched": matched})
+
+    # Direct flights the task did not ask for mean the response lists options instead of
+    # answering. Connecting flights cannot be answers to this direct-only task.
+    other_flights = sorted(
+        (mentioned & direct_flight_numbers) - expected_numbers - airline_flight_numbers - tied_flight_numbers
+    )
+    verifications.append({"bucket": "other_flights_absent", "flight_numbers": other_flights, "matched": not other_flights})
 
     success = all(v["matched"] for v in verifications)
 
@@ -623,6 +676,8 @@ class HalluminateNoodleFlightsDateRangeSearch(BaseMetric):
         else:
             reasoning = "Failed (verification): " + "; ".join(
                 f"Flight number {v['flight_number']} not in model answer"
+                if "flight_number" in v
+                else f"Model answer names flights the task did not ask for: {', '.join(v['flight_numbers'])}"
                 for v in result["verifications"]
                 if not v["matched"]
             )

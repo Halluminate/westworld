@@ -23,6 +23,7 @@ dependencies = [
     "pydantic>=2.0.0",
     "loguru>=0.7.0",
     "aiofiles>=23.0.0",
+    "requests>=2.31.0",
 ]
 
 [project.optional-dependencies]
@@ -47,6 +48,10 @@ westworld-demo = "westworld.demo:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/westworld"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_default_fixture_loop_scope = "function"
 
 [build-system]
 requires = ["hatchling"]

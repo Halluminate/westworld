@@ -1,13 +1,11 @@
 import os
-import re
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from urllib.parse import urlencode
 from zoneinfo import ZoneInfo
 
 import requests
-from playwright.async_api import Page
 from pydantic import BaseModel
 
 from westworld.base import (
@@ -17,6 +15,16 @@ from westworld.base import (
     async_retry_with_exponential_backoff,
     get_import_path,
 )
+from westworld.noodle_flights.answer_matching import (
+    extract_bare_amounts,
+    extract_money_amounts,
+    mentioned_flight_numbers,
+    price_mentioned,
+)
+
+
+if TYPE_CHECKING:
+    from playwright.async_api import Page
 
 
 # =========================
@@ -144,37 +152,35 @@ def find_cheapest_roundtrip_flights(flight_data: dict[str, Any]) -> dict[str, An
     """
     departing_flights = flight_data.get("departingFlights", [])
     returning_flights = flight_data.get("returningFlights", [])
+    all_flight_numbers = {
+        "allDepartureFlightNumbers": [f["flightNumber"] for f in departing_flights if f.get("flightNumber")],
+        "allReturnFlightNumbers": [f["flightNumber"] for f in returning_flights if f.get("flightNumber")],
+    }
 
     if not departing_flights or not returning_flights:
-        return {"departureFlightNumbers": [], "returnFlightNumbers": [], "totalPrice": 0, "error": "No flights found"}
-
-    # Find the cheapest combination
-    cheapest_total = float("inf")
-    cheapest_departure = None
-    cheapest_return = None
-
-    for dep_flight in departing_flights:
-        for ret_flight in returning_flights:
-            total_price = dep_flight.get("priceUsd", 0) + ret_flight.get("priceUsd", 0)
-            if total_price < cheapest_total:
-                cheapest_total = total_price
-                cheapest_departure = dep_flight
-                cheapest_return = ret_flight
-
-    if cheapest_departure and cheapest_return:
-        return {
-            "departureFlightNumbers": [cheapest_departure.get("flightNumber", "UNKNOWN")],
-            "returnFlightNumbers": [cheapest_return.get("flightNumber", "UNKNOWN")],
-            "totalPrice": int(cheapest_total),
-            "error": None,
-        }
-    else:
         return {
             "departureFlightNumbers": [],
             "returnFlightNumbers": [],
             "totalPrice": 0,
-            "error": "Could not find cheapest combination",
+            **all_flight_numbers,
+            "error": "No flights found",
         }
+
+    # The total is the sum of the two legs, so pairing any cheapest departure with any
+    # cheapest return gives a cheapest combination; all of them are valid answers.
+    cheapest_departure_price = min(f.get("priceUsd", 0) for f in departing_flights)
+    cheapest_return_price = min(f.get("priceUsd", 0) for f in returning_flights)
+    return {
+        "departureFlightNumbers": [
+            f.get("flightNumber", "UNKNOWN") for f in departing_flights if f.get("priceUsd", 0) == cheapest_departure_price
+        ],
+        "returnFlightNumbers": [
+            f.get("flightNumber", "UNKNOWN") for f in returning_flights if f.get("priceUsd", 0) == cheapest_return_price
+        ],
+        "totalPrice": int(cheapest_departure_price + cheapest_return_price),
+        **all_flight_numbers,
+        "error": None,
+    }
 
 
 def get_runtime_ground_truth(task_data: dict[str, Any], api_base_url: str | None = None) -> dict[str, Any]:
@@ -210,6 +216,8 @@ def get_runtime_ground_truth(task_data: dict[str, Any], api_base_url: str | None
             "departureFlightNumbers": cheapest_info["departureFlightNumbers"],
             "returnFlightNumbers": cheapest_info["returnFlightNumbers"],
             "totalPrice": cheapest_info["totalPrice"],
+            "allDepartureFlightNumbers": cheapest_info["allDepartureFlightNumbers"],
+            "allReturnFlightNumbers": cheapest_info["allReturnFlightNumbers"],
             "totalDepartingFlights": len(flight_data.get("departingFlights", [])),
             "totalReturningFlights": len(flight_data.get("returningFlights", [])),
             "error": cheapest_info["error"],
@@ -219,38 +227,12 @@ def get_runtime_ground_truth(task_data: dict[str, Any], api_base_url: str | None
             "departureFlightNumbers": [],
             "returnFlightNumbers": [],
             "totalPrice": 0,
+            "allDepartureFlightNumbers": [],
+            "allReturnFlightNumbers": [],
             "totalDepartingFlights": 0,
             "totalReturningFlights": 0,
             "error": str(e),
         }
-
-
-def normalize_price(price: str | int | float) -> str:
-    """Convert to string and remove all non-numeric characters except decimal point."""
-    return str(price).replace(",", "").replace("$", "").replace(" ", "")
-
-
-def check_flight_numbers(response: str, flight_numbers: list[str]) -> bool:
-    """Check if all flight numbers are found in the response."""
-    for flight_num in flight_numbers:
-        if "/" in flight_num:
-            # Split combined flight numbers and check each one
-            individual_flights = flight_num.split("/")
-            found_all = True
-            for individual_flight in individual_flights:
-                individual_flight = individual_flight.strip()
-                if not (
-                    individual_flight in response or f"{individual_flight[:2]} {individual_flight[2:]}" in response
-                ):
-                    found_all = False
-                    break
-            if not found_all:
-                return False
-        else:
-            # Handle single flight numbers
-            if not (flight_num in response or f"{flight_num[:2]} {flight_num[2:]}" in response):
-                return False
-    return True
 
 
 def verify_agent_response(
@@ -258,6 +240,11 @@ def verify_agent_response(
 ) -> VerificationResult:
     """
     Verify an agent's response to a roundtrip flight search task using runtime API data.
+
+    The response passes when it names a cheapest departure flight and a cheapest return
+    flight, names no other flight from the search results, and states the total price, as
+    money or as a standalone number. Prices are compared as numbers and flight numbers as
+    whole tokens (see ``answer_matching``).
 
     Args:
         agent_response: The agent's response (should contain flight numbers and total price)
@@ -271,41 +258,54 @@ def verify_agent_response(
     # Get ground truth from simulator
     ground_truth = get_runtime_ground_truth(task_data, base_url)
 
-    # Check for all flight numbers in both directions
-    has_departure_flights = check_flight_numbers(agent_response, ground_truth["departureFlightNumbers"])
-    has_return_flights = check_flight_numbers(agent_response, ground_truth["returnFlightNumbers"])
+    # Check the flight numbers in both directions; naming other flights fails the check.
+    # A flight number can appear in both lists, so anything expected in either is allowed.
+    expected_departure = set(ground_truth["departureFlightNumbers"])
+    expected_return = set(ground_truth["returnFlightNumbers"])
+    expected = expected_departure | expected_return
+    mentioned = mentioned_flight_numbers(
+        agent_response,
+        [*ground_truth.get("allDepartureFlightNumbers", []), *ground_truth.get("allReturnFlightNumbers", []), *expected],
+    )
+    has_departure_flights = bool(mentioned & expected_departure)
+    has_return_flights = bool(mentioned & expected_return)
+    other_flights = sorted(mentioned - expected)
+    has_price = price_mentioned(agent_response, ground_truth["totalPrice"], allow_bare=True)
+    passed = has_departure_flights and has_return_flights and has_price and not other_flights
 
-    # Extract all numbers from response and normalize them
-    numbers = re.findall(r"[\d,]+(?:\.\d+)?", agent_response) or []
-    normalized_numbers = [normalize_price(num) for num in numbers]
-    normalized_truth_price = normalize_price(ground_truth["totalPrice"])
-
-    # Check if any of the normalized numbers match our total price
-    has_price = normalized_truth_price in normalized_numbers
+    missing = [
+        label
+        for label, found in (
+            ("departure flight number", has_departure_flights),
+            ("return flight number", has_return_flights),
+            ("total price", has_price),
+        )
+        if not found
+    ]
+    problems = []
+    if missing:
+        problems.append(f"Missing {' and '.join(missing)} in response.")
+    if other_flights:
+        problems.append(f"Response names flights that are not the cheapest: {', '.join(other_flights)}.")
 
     return VerificationResult(
-        passed=has_departure_flights and has_return_flights and has_price,
+        passed=passed,
         details={
             "departureFlightsFound": has_departure_flights,
             "returnFlightsFound": has_return_flights,
             "priceFound": has_price,
+            "otherFlightsMentioned": other_flights,
             "expectedDepartureFlights": ground_truth["departureFlightNumbers"],
             "expectedReturnFlights": ground_truth["returnFlightNumbers"],
             "expectedTotalPrice": ground_truth["totalPrice"],
-            "numbersFound": numbers,
+            "numbersFound": [
+                str(amount) for amount in [*extract_money_amounts(agent_response), *extract_bare_amounts(agent_response)]
+            ],
             "totalDepartingFlights": ground_truth.get("totalDepartingFlights", 0),
             "totalReturningFlights": ground_truth.get("totalReturningFlights", 0),
             "error": ground_truth.get("error"),
         },
-        message=(
-            "Correct! Found all flight numbers and total price."
-            if has_departure_flights and has_return_flights and has_price
-            else f"Missing {'departure flight number(s)' if not has_departure_flights else ''}"
-            f"{' and ' if not has_departure_flights and not has_return_flights else ''}"
-            f"{'return flight number(s)' if not has_return_flights else ''}"
-            f"{' and ' if (not has_departure_flights or not has_return_flights) and not has_price else ''}"
-            f"{'total price' if not has_price else ''} in response."
-        ),
+        message=("Correct! Found all flight numbers and total price." if passed else " ".join(problems)),
     )
 
 
@@ -673,7 +673,7 @@ class HalluminateNoodleFlightsFlightSearchRoundtrip(BaseMetric):
         self.user_metadata = user_metadata
 
         self._ground_truth = create_flight_search_roundtrip_params_from_dict(values)
-        self._page: Page | None = None
+        self._page: "Page | None" = None
         self._answer_message: str | None = None
 
     def __repr__(self) -> str:

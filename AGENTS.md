@@ -10,7 +10,7 @@ Use Python 3.10+.
 - `python -m playwright install chromium` installs the browser required for demo and verifier flows.
 - `westworld-demo --index 0` runs the first validation task locally.
 - `python -m westworld.demo --task-id westworld/azora/basic_checkout/22` runs a specific task by ID.
-- `python -m pytest` runs the test suite. No `tests/` tree is committed yet, so add tests with your change set.
+- `uv run --extra dev pytest` runs the test suite under `tests/`. CI runs it on Python 3.10 and 3.12 for every pull request.
 
 ## Coding Style & Naming Conventions
 Follow the existing Python style: 4-space indentation, `snake_case` for modules and functions, `PascalCase` for dataclasses and Pydantic models, and `UPPER_SNAKE_CASE` for module constants such as `HF_DATASET`. Keep explicit type hints on public functions and preserve concise docstrings where behavior is not obvious. Match the current import order: standard library, third-party, then local imports. No formatter or linter config is checked in, so keep edits consistent with surrounding files and avoid unrelated refactors.
