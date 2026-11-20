@@ -1,12 +1,11 @@
 import os
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from urllib.parse import urlencode
 from zoneinfo import ZoneInfo
 
 import requests
-from playwright.async_api import Page
 from pydantic import BaseModel
 
 from westworld.base import (
@@ -16,7 +15,16 @@ from westworld.base import (
     async_retry_with_exponential_backoff,
     get_import_path,
 )
-from westworld.noodle_flights.answer_matching import amount_mentioned, extract_amounts, mentioned_flight_numbers
+from westworld.noodle_flights.answer_matching import (
+    extract_bare_amounts,
+    extract_money_amounts,
+    mentioned_flight_numbers,
+    price_mentioned,
+)
+
+
+if TYPE_CHECKING:
+    from playwright.async_api import Page
 
 
 # =========================
@@ -234,8 +242,9 @@ def verify_agent_response(
     Verify an agent's response to a roundtrip flight search task using runtime API data.
 
     The response passes when it names a cheapest departure flight and a cheapest return
-    flight, names no other flight from the search results, and states the total price.
-    Prices are compared as numbers and flight numbers as whole tokens (see ``answer_matching``).
+    flight, names no other flight from the search results, and states the total price, as
+    money or as a standalone number. Prices are compared as numbers and flight numbers as
+    whole tokens (see ``answer_matching``).
 
     Args:
         agent_response: The agent's response (should contain flight numbers and total price)
@@ -249,19 +258,19 @@ def verify_agent_response(
     # Get ground truth from simulator
     ground_truth = get_runtime_ground_truth(task_data, base_url)
 
-    # Check the flight numbers in both directions; naming other flights fails the check
+    # Check the flight numbers in both directions; naming other flights fails the check.
+    # A flight number can appear in both lists, so anything expected in either is allowed.
     expected_departure = set(ground_truth["departureFlightNumbers"])
     expected_return = set(ground_truth["returnFlightNumbers"])
-    mentioned_departure = mentioned_flight_numbers(
-        agent_response, [*ground_truth.get("allDepartureFlightNumbers", []), *expected_departure]
+    expected = expected_departure | expected_return
+    mentioned = mentioned_flight_numbers(
+        agent_response,
+        [*ground_truth.get("allDepartureFlightNumbers", []), *ground_truth.get("allReturnFlightNumbers", []), *expected],
     )
-    mentioned_return = mentioned_flight_numbers(
-        agent_response, [*ground_truth.get("allReturnFlightNumbers", []), *expected_return]
-    )
-    has_departure_flights = bool(mentioned_departure & expected_departure)
-    has_return_flights = bool(mentioned_return & expected_return)
-    other_flights = sorted((mentioned_departure - expected_departure) | (mentioned_return - expected_return))
-    has_price = amount_mentioned(agent_response, ground_truth["totalPrice"])
+    has_departure_flights = bool(mentioned & expected_departure)
+    has_return_flights = bool(mentioned & expected_return)
+    other_flights = sorted(mentioned - expected)
+    has_price = price_mentioned(agent_response, ground_truth["totalPrice"], allow_bare=True)
     passed = has_departure_flights and has_return_flights and has_price and not other_flights
 
     missing = [
@@ -289,7 +298,9 @@ def verify_agent_response(
             "expectedDepartureFlights": ground_truth["departureFlightNumbers"],
             "expectedReturnFlights": ground_truth["returnFlightNumbers"],
             "expectedTotalPrice": ground_truth["totalPrice"],
-            "numbersFound": [str(amount) for amount in extract_amounts(agent_response)],
+            "numbersFound": [
+                str(amount) for amount in [*extract_money_amounts(agent_response), *extract_bare_amounts(agent_response)]
+            ],
             "totalDepartingFlights": ground_truth.get("totalDepartingFlights", 0),
             "totalReturningFlights": ground_truth.get("totalReturningFlights", 0),
             "error": ground_truth.get("error"),
@@ -662,7 +673,7 @@ class HalluminateNoodleFlightsFlightSearchRoundtrip(BaseMetric):
         self.user_metadata = user_metadata
 
         self._ground_truth = create_flight_search_roundtrip_params_from_dict(values)
-        self._page: Page | None = None
+        self._page: "Page | None" = None
         self._answer_message: str | None = None
 
     def __repr__(self) -> str:

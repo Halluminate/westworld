@@ -1,12 +1,11 @@
 import os
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from urllib.parse import urlencode
 from zoneinfo import ZoneInfo
 
 import requests
-from playwright.async_api import Page
 from pydantic import BaseModel
 
 from westworld.base import (
@@ -16,7 +15,16 @@ from westworld.base import (
     async_retry_with_exponential_backoff,
     get_import_path,
 )
-from westworld.noodle_flights.answer_matching import amount_mentioned, extract_amounts, mentioned_flight_numbers
+from westworld.noodle_flights.answer_matching import (
+    extract_bare_amounts,
+    extract_money_amounts,
+    mentioned_flight_numbers,
+    price_mentioned,
+)
+
+
+if TYPE_CHECKING:
+    from playwright.async_api import Page
 
 
 # =========================
@@ -202,6 +210,11 @@ def get_runtime_ground_truth(task_data: dict[str, Any], api_base_url: str | None
                 "flightNumbers": flight_numbers,
                 "price": cheapest_price,
                 "allFlightNumbers": [f["flightNumber"] for f in flights if f.get("flightNumber")],
+                "candidateFlightNumbers": [
+                    f["flightNumber"]
+                    for f in flights
+                    if f.get("flightNumber") and (not require_direct or len(f.get("segments", [])) == 0)
+                ],
                 "totalFlights": len(flights),
                 "cheapestFlightsCount": len(cheapest_flights),
                 "requireDirect": require_direct,
@@ -238,9 +251,10 @@ def verify_agent_response(
     """
     Verify a cheapest flight search task by querying the simulator at runtime.
 
-    The response passes when it names one of the cheapest flights, names no other
-    flight from the search results, and states the cheapest price. Prices are compared
-    as numbers and flight numbers as whole tokens (see ``answer_matching``).
+    The response passes when it names one of the cheapest flights, names no other flight
+    that could be the answer, and states the cheapest price, as money or as a standalone
+    number. Prices are compared as numbers and flight numbers as whole tokens (see
+    ``answer_matching``).
 
     Args:
         agent_response: The agent's response (should contain flight number and price)
@@ -254,14 +268,15 @@ def verify_agent_response(
     # Get ground truth from simulator
     ground_truth = get_runtime_ground_truth(task_data, base_url)
 
-    # Any flight at the cheapest price is a correct answer; naming other flights is not
+    # Any flight at the cheapest price is a correct answer. Naming another flight that could
+    # be an answer is not; on a direct-only task, mentioning a connecting flight is fine.
     expected_flight_numbers = ground_truth["flightNumbers"]
-    mentioned = mentioned_flight_numbers(
-        agent_response, [*ground_truth.get("allFlightNumbers", []), *expected_flight_numbers]
-    )
-    has_flight_number = bool(mentioned & set(expected_flight_numbers))
-    other_flights = sorted(mentioned - set(expected_flight_numbers))
-    has_price = amount_mentioned(agent_response, ground_truth["price"])
+    expected = set(expected_flight_numbers)
+    mentioned = mentioned_flight_numbers(agent_response, [*ground_truth.get("allFlightNumbers", []), *expected])
+    possible_answers = set(ground_truth.get("candidateFlightNumbers", [])) | expected
+    has_flight_number = bool(mentioned & expected)
+    other_flights = sorted((mentioned & possible_answers) - expected)
+    has_price = price_mentioned(agent_response, ground_truth["price"], allow_bare=True)
     passed = has_flight_number and has_price and not other_flights
 
     # Create appropriate message based on direct flight requirement
@@ -285,7 +300,9 @@ def verify_agent_response(
             "otherFlightsMentioned": other_flights,
             "expectedFlightNumbers": expected_flight_numbers,
             "expectedPrice": ground_truth["price"],
-            "numbersFound": [str(amount) for amount in extract_amounts(agent_response)],
+            "numbersFound": [
+                str(amount) for amount in [*extract_money_amounts(agent_response), *extract_bare_amounts(agent_response)]
+            ],
             "totalFlights": ground_truth.get("totalFlights", 0),
             "cheapestFlightsCount": ground_truth.get("cheapestFlightsCount", 0),
             "requireDirect": ground_truth.get("requireDirect", False),
@@ -636,7 +653,7 @@ class HalluminateNoodleFlightsFlightSearchCheapest(BaseMetric):
         self.user_metadata = user_metadata
 
         self._ground_truth = create_flight_search_cheapest_params_from_dict(values)
-        self._page: Page | None = None
+        self._page: "Page | None" = None
         self._answer_message: str | None = None
 
     def __repr__(self) -> str:

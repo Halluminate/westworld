@@ -35,10 +35,35 @@ def check_one_way(answer: str, direct: bool = False):
         "The cheapest flight is AA108/AA985 at $247.00.",
         "AA108/AA985, USD 247",
         "Take AA 108 connecting to AA 985 for 247 dollars.",
+        "AA108/AA985 for 247.",
+        (
+            "AA108 (SFO 8:00 AM -> ORD 2:05 PM, 4h 05m), 1h 20m layover in Chicago O'Hare, "
+            "then AA985 (ORD 3:25 PM -> JFK 6:35 PM, 2h 10m). Price $247."
+        ),
     ],
 )
 def test_cheapest_answers_in_common_formats_pass(one_way, answer):
     assert check_one_way(answer).passed
+
+
+def test_price_is_not_read_from_a_time_or_a_gate(one_way):
+    assert not check_one_way("AA108/AA985 departs at 2:47 PM from gate B247.").passed
+
+
+def test_price_is_not_read_from_a_year(monkeypatch):
+    flights = [flight("XX100", 2030), flight("XX200", 2100)]
+    monkeypatch.setattr(
+        flight_search_cheapest, "query_noodle_flights_simulator", lambda *args, **kwargs: {"departingFlights": flights}
+    )
+    assert not check_one_way("XX100 departs on June 12, 2030.").passed
+    assert check_one_way("XX100 for $2,030.").passed
+    assert check_one_way("XX100 for 2,030.").passed
+
+
+def test_direct_task_answer_may_mention_a_connecting_flight(one_way):
+    answer = "UA389 at $284 (a one-stop AA108/AA985 at $247 is not direct)."
+    assert check_one_way(answer, direct=True).passed
+    assert not check_one_way("UA389 at $284, or B6101 at $301.", direct=True).passed
 
 
 @pytest.mark.parametrize(
@@ -110,3 +135,14 @@ def test_cheapest_round_trip_answers_pass(round_trip, answer):
 )
 def test_round_trip_lists_and_wrong_answers_fail(round_trip, answer):
     assert not check_round_trip(answer).passed
+
+
+def test_round_trip_flight_number_in_both_lists(monkeypatch):
+    # B6124 is the cheapest return and also a more expensive departure.
+    data = {
+        "departingFlights": [flight("B6123", 225), flight("B6124", 260)],
+        "returningFlights": [flight("B6124", 240), flight("XY1", 250)],
+    }
+    monkeypatch.setattr(flight_search_roundtrip, "query_noodle_flights_simulator_roundtrip", lambda *args, **kwargs: data)
+    assert check_round_trip("Depart B6123, return B6124, total $465.").passed
+    assert not check_round_trip("Depart B6124, return B6124, total $465.").passed
